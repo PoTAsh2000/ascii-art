@@ -48,7 +48,14 @@ func fail(err error) {
 	os.Exit(1)
 }
 
-func process_image(image image.Image) {
+func process_image(img image.Image) {
+	os.Stdout.WriteString(render(img))
+}
+
+// render builds the full ASCII frame for an image and returns it as one string.
+// Kept separate from process_image so it can be unit-tested and so video
+// playback can reuse it to build a frame before writing.
+func render(img image.Image) string {
 	ascii_map := map[float64]string{
 		0:   " ",
 		0.1: ".",
@@ -63,7 +70,7 @@ func process_image(image image.Image) {
 		1:   "█",
 	}
 
-	bounds := image.Bounds()
+	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 
 	// Build the whole frame, then write once. One syscall instead of thousands
@@ -73,7 +80,7 @@ func process_image(image image.Image) {
 
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
-			r, g, b, _ := image.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
+			r, g, b, _ := img.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
 
 			normal_r := float64(r>>8) / 255.0
 			normal_g := float64(g>>8) / 255.0
@@ -94,7 +101,7 @@ func process_image(image image.Image) {
 		sb.WriteByte('\n')
 	}
 
-	os.Stdout.WriteString(sb.String())
+	return sb.String()
 }
 
 func resize_image(filename string, terminal_width int, terminal_height int) (image.Image, error) {
