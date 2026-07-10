@@ -6,6 +6,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"math"
 	"os"
 	"strings"
 	"github.com/nfnt/resize"
@@ -21,6 +22,10 @@ const (
 // asciiRamp maps brightness (dark→light) to characters. Kept deliberately short
 // so the art stays chunky/cartoonish rather than a smooth photographic gradient.
 var asciiRamp = []rune{' ', '.', 'i', 'c', 'o', 'L', 'P', 'O', '?', '#', '█'}
+
+// gamma > 1 brightens midtones before ramp mapping, so shadow detail isn't
+// crushed into the darkest few characters. Tune to taste; 0 and 1 stay fixed.
+const gamma = 1.8
 
 func main() {
 	if len(os.Args) < 2 {
@@ -83,6 +88,8 @@ func render(img image.Image) string {
 			if luminance > 1 {
 				luminance = 1
 			}
+
+			luminance = math.Pow(luminance, 1.0/gamma)
 
 			idx := int(luminance*float64(len(asciiRamp)-1) + 0.5)
 			sb.WriteRune(asciiRamp[idx])
