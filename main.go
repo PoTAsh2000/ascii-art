@@ -27,6 +27,10 @@ var asciiRamp = []rune{' ', '.', 'i', 'c', 'o', 'L', 'P', 'O', '?', '#', '█'}
 // crushed into the darkest few characters. Tune to taste; 0 and 1 stay fixed.
 const gamma = 1.8
 
+// cellAspect is the width:height ratio of a terminal character cell (~0.5,
+// cells are roughly twice as tall as wide). Used to undo vertical squashing.
+const cellAspect = 0.5
+
 func main() {
 	if len(os.Args) < 2 {
 		fail(fmt.Errorf("usage: ascii-art <image-path>"))
@@ -112,7 +116,38 @@ func resize_image(filename string, terminal_width int, terminal_height int) (ima
 		return nil, fmt.Errorf("decode %q: %w", filename, err)
 	}
 
-	return resize.Resize(uint(terminal_width), uint(terminal_height), decoded_image, resize.Lanczos3), nil
+	bounds := decoded_image.Bounds()
+	cols, rows := fitDimensions(bounds.Dx(), bounds.Dy(), terminal_width, terminal_height)
+
+	return resize.Resize(uint(cols), uint(rows), decoded_image, resize.Lanczos3), nil
+}
+
+// fitDimensions returns the largest (cols, rows) that fits within maxCols×maxRows
+// while preserving the source aspect ratio and correcting for the terminal cell
+// shape (cellAspect). This fixes both vertical squashing (P2) and stretching of
+// non-matching aspect ratios (P10). Output is contain-style: no padding.
+func fitDimensions(srcW, srcH, maxCols, maxRows int) (cols, rows int) {
+	if srcW <= 0 || srcH <= 0 {
+		return 1, 1
+	}
+
+	// Rows needed for a given column count so the image keeps its aspect ratio
+	// in character space: rows = cols * cellAspect * (srcH/srcW).
+	cols = maxCols
+	rows = int(float64(cols) * cellAspect * float64(srcH) / float64(srcW))
+
+	if rows > maxRows {
+		rows = maxRows
+		cols = int(float64(rows) * float64(srcW) / (cellAspect * float64(srcH)))
+	}
+
+	if cols < 1 {
+		cols = 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	return cols, rows
 }
 
 func get_terminal_size() (width int, height int, err error) {

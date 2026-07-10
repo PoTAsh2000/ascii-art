@@ -16,24 +16,54 @@ func gridLines(frame string) []string {
 }
 
 // TestRenderRealImage is the end-to-end "draws an image" test: it decodes a
-// tracked sample, resizes it, renders it, and checks the output is a proper
-// rectangular grid at the requested size.
+// tracked sample, resizes it (fit/contain), renders it, and checks the output is
+// a rectangular grid that fits within the requested bounds.
 func TestRenderRealImage(t *testing.T) {
-	const w, h = 80, 40
-	img, err := resize_image(filepath.Join("test_images", "master-chief.jpg"), w, h)
+	const maxW, maxH = 80, 40
+	img, err := resize_image(filepath.Join("test_images", "master-chief.jpg"), maxW, maxH)
 	if err != nil {
 		t.Fatalf("resize_image failed: %v", err)
 	}
 
-	frame := render(img)
-	lines := gridLines(frame)
-	if len(lines) != h {
-		t.Fatalf("expected %d rows, got %d", h, len(lines))
+	lines := gridLines(render(img))
+	if len(lines) == 0 || len(lines) > maxH {
+		t.Fatalf("row count %d not in 1..%d", len(lines), maxH)
+	}
+	rowWidth := len([]rune(lines[0]))
+	if rowWidth == 0 || rowWidth > maxW {
+		t.Fatalf("row width %d not in 1..%d", rowWidth, maxW)
 	}
 	for i, ln := range lines {
-		if got := len([]rune(ln)); got != w {
-			t.Fatalf("row %d width = %d, want %d", i, got, w)
+		if got := len([]rune(ln)); got != rowWidth {
+			t.Fatalf("row %d width = %d, want uniform %d", i, got, rowWidth)
 		}
+	}
+}
+
+// TestFitDimensions checks contain-fit + cell-aspect correction (P2/P10).
+func TestFitDimensions(t *testing.T) {
+	const maxCols, maxRows = 80, 40
+
+	// Square source: cell-aspect should halve rows relative to cols.
+	cols, rows := fitDimensions(100, 100, maxCols, maxRows)
+	if cols < 1 || rows < 1 || cols > maxCols || rows > maxRows {
+		t.Fatalf("square out of bounds: %dx%d", cols, rows)
+	}
+	if wantRows := int(float64(cols) * cellAspect); rows != wantRows {
+		t.Fatalf("square: rows=%d, want ~cols*cellAspect=%d", rows, wantRows)
+	}
+
+	// Wide (2:1) and tall (1:2) sources must both stay within bounds, >=1.
+	for _, tc := range []struct{ w, h int }{{200, 100}, {100, 200}, {1, 1}} {
+		c, r := fitDimensions(tc.w, tc.h, maxCols, maxRows)
+		if c < 1 || r < 1 || c > maxCols || r > maxRows {
+			t.Fatalf("src %dx%d -> %dx%d out of 1..%dx%d", tc.w, tc.h, c, r, maxCols, maxRows)
+		}
+	}
+
+	// Degenerate source dimensions must not panic.
+	if c, r := fitDimensions(0, 0, maxCols, maxRows); c < 1 || r < 1 {
+		t.Fatalf("zero source -> %dx%d, want >=1x1", c, r)
 	}
 }
 
