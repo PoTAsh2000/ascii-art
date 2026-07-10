@@ -6,7 +6,6 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"math"
 	"os"
 	"strings"
 	"github.com/nfnt/resize"
@@ -18,6 +17,10 @@ const (
 	greenWeight = 0.7152
 	blueWeight  = 0.0722
 )
+
+// asciiRamp maps brightness (dark→light) to characters. Kept deliberately short
+// so the art stays chunky/cartoonish rather than a smooth photographic gradient.
+var asciiRamp = []rune{' ', '.', 'i', 'c', 'o', 'L', 'P', 'O', '?', '#', '█'}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -56,27 +59,13 @@ func process_image(img image.Image) {
 // Kept separate from process_image so it can be unit-tested and so video
 // playback can reuse it to build a frame before writing.
 func render(img image.Image) string {
-	ascii_map := map[float64]string{
-		0:   " ",
-		0.1: ".",
-		0.2: "i",
-		0.3: "c",
-		0.4: "o",
-		0.5: "L",
-		0.6: "P",
-		0.7: "O",
-		0.8: "?",
-		0.9: "#",
-		1:   "█",
-	}
-
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 
 	// Build the whole frame, then write once. One syscall instead of thousands
 	// and no flicker — this is the fast path video playback will reuse.
 	var sb strings.Builder
-	sb.Grow(width*height + height)
+	sb.Grow(width*height*3 + height) // ramp runes are up to 3 bytes (█)
 
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
@@ -87,7 +76,6 @@ func render(img image.Image) string {
 			normal_b := float64(b>>8) / 255.0
 
 			luminance := redWeight*normal_r + greenWeight*normal_g + blueWeight*normal_b
-			luminance = math.Floor(luminance*10) / 10.0
 
 			if luminance < 0 {
 				luminance = 0
@@ -96,7 +84,8 @@ func render(img image.Image) string {
 				luminance = 1
 			}
 
-			sb.WriteString(ascii_map[luminance])
+			idx := int(luminance*float64(len(asciiRamp)-1) + 0.5)
+			sb.WriteRune(asciiRamp[idx])
 		}
 		sb.WriteByte('\n')
 	}
