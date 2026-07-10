@@ -8,8 +8,7 @@ import (
 	_ "image/png"
 	"math"
 	"os"
-	"os/exec"
-
+	"strings"
 	"github.com/nfnt/resize"
 	"golang.org/x/term"
 )
@@ -21,14 +20,32 @@ const (
 )
 
 func main() {
-	cmd := exec.Command("clear")
-	cmd.Stdout = os.Stdout
-	cmd.Run()
+	if len(os.Args) < 2 {
+		fail(fmt.Errorf("usage: ascii-art <image-path>"))
+	}
+	filename := os.Args[1]
 
-	terminal_width, terminal_height := get_terminal_size()
+	// Erase screen + move cursor home (once). For future video, redraw each
+	// frame with just "\x1b[H" to overwrite in place without flicker.
+	fmt.Print("\x1b[2J\x1b[H")
 
-	var resized_image_data image.Image = resize_image("test_images/porsche-911-1.jpg", terminal_width, terminal_height)
+	terminal_width, terminal_height, err := get_terminal_size()
+	if err != nil {
+		fail(err)
+	}
+
+	resized_image_data, err := resize_image(filename, terminal_width, terminal_height)
+	if err != nil {
+		fail(err)
+	}
+
 	process_image(resized_image_data)
+}
+
+// fail prints a uniform error message to stderr and exits non-zero.
+func fail(err error) {
+	fmt.Fprintln(os.Stderr, "error:", err)
+	os.Exit(1)
 }
 
 func process_image(image image.Image) {
@@ -49,6 +66,11 @@ func process_image(image image.Image) {
 	bounds := image.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 
+	// Build the whole frame, then write once. One syscall instead of thousands
+	// and no flicker — this is the fast path video playback will reuse.
+	var sb strings.Builder
+	sb.Grow(width*height + height)
+
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			r, g, b, _ := image.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
@@ -67,36 +89,33 @@ func process_image(image image.Image) {
 				luminance = 1
 			}
 
-			character := ascii_map[luminance]
-			fmt.Printf("%s", character)
+			sb.WriteString(ascii_map[luminance])
 		}
+		sb.WriteByte('\n')
 	}
+
+	os.Stdout.WriteString(sb.String())
 }
 
-func resize_image(filename string, terminal_width int, terminal_height int) (resized_image image.Image) {
+func resize_image(filename string, terminal_width int, terminal_height int) (image.Image, error) {
 	image_file, err := os.Open(filename)
 	if err != nil {
-		panic(fmt.Sprintf("an exception occurred while trying to open file. %v", err))
+		return nil, fmt.Errorf("open %q: %w", filename, err)
 	}
 	defer image_file.Close()
 
-	image, _, err := image.Decode(image_file)
+	decoded_image, _, err := image.Decode(image_file)
 	if err != nil {
-		panic(fmt.Sprintf("an exception occurred while trying decode the image. %v", err))
+		return nil, fmt.Errorf("decode %q: %w", filename, err)
 	}
 
-	return resize.Resize(uint(terminal_width), uint(terminal_height), image, resize.Lanczos3)
+	return resize.Resize(uint(terminal_width), uint(terminal_height), decoded_image, resize.Lanczos3), nil
 }
 
-func get_terminal_size() (width int, height int) {
-	width, height, err := term.GetSize(int(os.Stdout.Fd()))
-
+func get_terminal_size() (width int, height int, err error) {
+	width, height, err = term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
-		panic(fmt.Sprintf("An exception occurred while trying to get terminal size. %v", err))
+		return 0, 0, fmt.Errorf("get terminal size: %w", err)
 	}
-
-	terminal_width := width
-	terminal_height := height
-
-	return terminal_width, terminal_height
+	return width, height, nil
 }
