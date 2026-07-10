@@ -5,8 +5,7 @@
 * Install the **term** and **resize** packages:
     * go get golang.org/x/term
     * go get github.com/nfnt/resize
-* Choose the image you want to convert in the ```func main() { ... }``` function
-* ▶️ run the program with ```go run .``` in the src directory
+* ▶️ run the program, passing the image path as the only argument: ```go run main.go test_images/master-chief.jpg```
 
 ## Recommandations
 ⚠️ Disclamer: Some images fail to decode. This is something that still needs to be looked at. Most jpg and png files work fine.
