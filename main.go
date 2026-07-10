@@ -19,6 +19,18 @@ const (
 	blueWeight  = 0.0722
 )
 
+// asciiRamp maps brightness (dark→light) to characters. Kept deliberately short
+// so the art stays chunky/cartoonish rather than a smooth photographic gradient.
+var asciiRamp = []rune{' ', '.', 'i', 'c', 'o', 'L', 'P', 'O', '?', '#', '█'}
+
+// gamma > 1 brightens midtones before ramp mapping, so shadow detail isn't
+// crushed into the darkest few characters. Tune to taste; 0 and 1 stay fixed.
+const gamma = 1.8
+
+// cellAspect is the width:height ratio of a terminal character cell (~0.5,
+// cells are roughly twice as tall as wide). Used to undo vertical squashing.
+const cellAspect = 0.5
+
 func main() {
 	if len(os.Args) < 2 {
 		fail(fmt.Errorf("usage: ascii-art <image-path>"))
@@ -56,27 +68,13 @@ func process_image(img image.Image) {
 // Kept separate from process_image so it can be unit-tested and so video
 // playback can reuse it to build a frame before writing.
 func render(img image.Image) string {
-	ascii_map := map[float64]string{
-		0:   " ",
-		0.1: ".",
-		0.2: "i",
-		0.3: "c",
-		0.4: "o",
-		0.5: "L",
-		0.6: "P",
-		0.7: "O",
-		0.8: "?",
-		0.9: "#",
-		1:   "█",
-	}
-
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 
 	// Build the whole frame, then write once. One syscall instead of thousands
 	// and no flicker — this is the fast path video playback will reuse.
 	var sb strings.Builder
-	sb.Grow(width*height + height)
+	sb.Grow(width*height*3 + height) // ramp runes are up to 3 bytes (█)
 
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
@@ -87,7 +85,6 @@ func render(img image.Image) string {
 			normal_b := float64(b>>8) / 255.0
 
 			luminance := redWeight*normal_r + greenWeight*normal_g + blueWeight*normal_b
-			luminance = math.Floor(luminance*10) / 10.0
 
 			if luminance < 0 {
 				luminance = 0
@@ -96,7 +93,10 @@ func render(img image.Image) string {
 				luminance = 1
 			}
 
-			sb.WriteString(ascii_map[luminance])
+			luminance = math.Pow(luminance, 1.0/gamma)
+
+			idx := int(luminance*float64(len(asciiRamp)-1) + 0.5)
+			sb.WriteRune(asciiRamp[idx])
 		}
 		sb.WriteByte('\n')
 	}
@@ -116,7 +116,38 @@ func resize_image(filename string, terminal_width int, terminal_height int) (ima
 		return nil, fmt.Errorf("decode %q: %w", filename, err)
 	}
 
-	return resize.Resize(uint(terminal_width), uint(terminal_height), decoded_image, resize.Lanczos3), nil
+	bounds := decoded_image.Bounds()
+	cols, rows := fitDimensions(bounds.Dx(), bounds.Dy(), terminal_width, terminal_height)
+
+	return resize.Resize(uint(cols), uint(rows), decoded_image, resize.Lanczos3), nil
+}
+
+// fitDimensions returns the largest (cols, rows) that fits within maxCols×maxRows
+// while preserving the source aspect ratio and correcting for the terminal cell
+// shape (cellAspect). This fixes both vertical squashing (P2) and stretching of
+// non-matching aspect ratios (P10). Output is contain-style: no padding.
+func fitDimensions(srcW, srcH, maxCols, maxRows int) (cols, rows int) {
+	if srcW <= 0 || srcH <= 0 {
+		return 1, 1
+	}
+
+	// Rows needed for a given column count so the image keeps its aspect ratio
+	// in character space: rows = cols * cellAspect * (srcH/srcW).
+	cols = maxCols
+	rows = int(float64(cols) * cellAspect * float64(srcH) / float64(srcW))
+
+	if rows > maxRows {
+		rows = maxRows
+		cols = int(float64(rows) * float64(srcW) / (cellAspect * float64(srcH)))
+	}
+
+	if cols < 1 {
+		cols = 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	return cols, rows
 }
 
 func get_terminal_size() (width int, height int, err error) {
