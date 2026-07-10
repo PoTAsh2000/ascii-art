@@ -52,6 +52,28 @@ func main() {
 	}
 
 	process_image(resized_image_data)
+
+	// Keep the art on screen: wait for any key before exiting so the shell
+	// prompt doesn't immediately clobber the image. No prompt is printed on
+	// purpose — the pause is silent.
+	wait_for_key()
+}
+
+// wait_for_key blocks until a single key is pressed. It puts stdin in raw mode
+// so one keystroke returns immediately (no Enter needed) and prints nothing.
+// If raw mode isn't available (e.g. stdin isn't a terminal) it falls back to
+// reading a line so the program still doesn't exit instantly.
+func wait_for_key() {
+	fd := int(os.Stdin.Fd())
+	old_state, err := term.MakeRaw(fd)
+	if err != nil {
+		fmt.Fscanln(os.Stdin)
+		return
+	}
+	defer term.Restore(fd, old_state)
+
+	var buf [1]byte
+	os.Stdin.Read(buf[:])
 }
 
 // fail prints a uniform error message to stderr and exits non-zero.
