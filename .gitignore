@@ -1,3 +1,6 @@
 # Build artifacts
 *.exe
 /ascii-art
+
+# Local sample images (kept locally, not tracked)
+test_images/

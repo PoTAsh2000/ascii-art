@@ -20,7 +20,7 @@ func gridLines(frame string) []string {
 // a rectangular grid that fits within the requested bounds.
 func TestRenderRealImage(t *testing.T) {
 	const maxW, maxH = 80, 40
-	img, err := resize_image(filepath.Join("test_images", "master-chief.jpg"), maxW, maxH)
+	img, err := resize_image(filepath.Join("testdata", "sample.png"), maxW, maxH)
 	if err != nil {
 		t.Fatalf("resize_image failed: %v", err)
 	}
