@@ -1,41 +1,95 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"math"
 	"os"
 	"strings"
+
 	"github.com/nfnt/resize"
 	"golang.org/x/term"
 )
-
-const (
-	redWeight   = 0.2126
-	greenWeight = 0.7152
-	blueWeight  = 0.0722
-)
-
-// asciiRamp maps brightness (dark→light) to characters. Kept deliberately short
-// so the art stays chunky/cartoonish rather than a smooth photographic gradient.
-var asciiRamp = []rune{' ', '.', 'i', 'c', 'o', 'L', 'P', 'O', '?', '#', '█'}
-
-// gamma > 1 brightens midtones before ramp mapping, so shadow detail isn't
-// crushed into the darkest few characters. Tune to taste; 0 and 1 stay fixed.
-const gamma = 1.8
 
 // cellAspect is the width:height ratio of a terminal character cell (~0.5,
 // cells are roughly twice as tall as wide). Used to undo vertical squashing.
 const cellAspect = 0.5
 
-func main() {
-	if len(os.Args) < 2 {
-		fail(fmt.Errorf("usage: ascii-art <image-path>"))
+// Edge-detection defaults. Contours use the four characters | / _ \ drawn on top
+// of the brightness ramp. These seed the matching CLI flags; each filter file
+// documents the parameter it consumes.
+const (
+	// defaultTile is pixels-per-character-cell per axis. 8 matches an 8×8 font
+	// tile (the compute-shader group size in the reference), so each cell owns a
+	// clean 8×8 block of the /8-downscaled image.
+	defaultTile = 8
+	// DoG preprocess (filter_dog.go): two blurs at sigma and sigma*scale, their
+	// weighted difference thresholded into a binary edge mask.
+	defaultSigma        = 2.0
+	defaultSigmaScale   = 1.6
+	defaultTau          = 1.0
+	defaultDogThreshold = 0.035
+	// Sobel voting (filter_sobel.go / edges.go): ignore near-zero gradients, and
+	// require this fraction of a tile to be edge pixels before drawing a line
+	// (0.125 = the reference's 8-of-64 rule).
+	defaultMagThreshold = 0.0
+	defaultMinTileFrac  = 0.125
+)
+
+// toggle is a flag.Value accepting 1/0, true/false, on/off (case-insensitive).
+// It is a boolean flag, so a bare --edges means "on" and values use --edges=off.
+type toggle bool
+
+func (t *toggle) String() string {
+	if t != nil && bool(*t) {
+		return "on"
 	}
-	filename := os.Args[1]
+	return "off"
+}
+
+func (t *toggle) Set(s string) error {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "on", "yes":
+		*t = true
+	case "0", "false", "off", "no":
+		*t = false
+	default:
+		return fmt.Errorf("invalid value %q (use 1/0, true/false, on/off)", s)
+	}
+	return nil
+}
+
+func (t *toggle) IsBoolFlag() bool { return true }
+
+func main() {
+	edges := toggle(true) // on by default
+	debug := toggle(true) // dump per-filter images by default
+	opts := edgeOptions{tile: defaultTile}
+	flag.Var(&edges, "edges", "draw edge/contour lines (1/0, true/false, on/off)")
+	flag.Var(&debug, "debug", "write a PNG per filter step (1/0, true/false, on/off)")
+	flag.StringVar(&opts.debugDir, "debug-dir", "debug", "directory for filter-step images")
+	flag.Float64Var(&opts.sigma, "sigma", defaultSigma, "DoG base Gaussian sigma")
+	flag.Float64Var(&opts.sigmaScale, "sigma-scale", defaultSigmaScale, "DoG second-Gaussian sigma multiplier")
+	flag.Float64Var(&opts.tau, "tau", defaultTau, "DoG difference weight")
+	flag.Float64Var(&opts.dogThreshold, "dog-threshold", defaultDogThreshold, "DoG magnitude to count a pixel as an edge")
+	flag.Float64Var(&opts.magThreshold, "mag-threshold", defaultMagThreshold, "min Sobel gradient magnitude to vote")
+	flag.Float64Var(&opts.minTileFrac, "tile-fill", defaultMinTileFrac, "min edge-pixel fraction of a tile to draw a contour")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: ascii-art [flags] <image-path>")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if flag.NArg() < 1 {
+		flag.Usage()
+		os.Exit(1)
+	}
+	filename := flag.Arg(0)
+	opts.enabled = bool(edges)
+	opts.debug = bool(debug)
 
 	// Erase screen + move cursor home (once). For future video, redraw each
 	// frame with just "\x1b[H" to overwrite in place without flicker.
@@ -46,12 +100,21 @@ func main() {
 		fail(err)
 	}
 
-	resized_image_data, err := resize_image(filename, terminal_width, terminal_height)
+	decoded, err := decodeImage(filename)
 	if err != nil {
 		fail(err)
 	}
 
-	process_image(resized_image_data)
+	bounds := decoded.Bounds()
+	cols, rows := fitDimensions(bounds.Dx(), bounds.Dy(), terminal_width, terminal_height)
+	charImg := resize.Resize(uint(cols), uint(rows), decoded, resize.Lanczos3)
+
+	var edgeGrid [][]rune
+	if opts.enabled {
+		edgeGrid = computeEdgeGrid(decoded, cols, rows, opts)
+	}
+
+	os.Stdout.WriteString(render(charImg, edgeGrid))
 
 	// Keep the art on screen: wait for any key before exiting so the shell
 	// prompt doesn't immediately clobber the image. No prompt is printed on
@@ -82,51 +145,10 @@ func fail(err error) {
 	os.Exit(1)
 }
 
-func process_image(img image.Image) {
-	os.Stdout.WriteString(render(img))
-}
-
-// render builds the full ASCII frame for an image and returns it as one string.
-// Kept separate from process_image so it can be unit-tested and so video
-// playback can reuse it to build a frame before writing.
-func render(img image.Image) string {
-	bounds := img.Bounds()
-	width, height := bounds.Dx(), bounds.Dy()
-
-	// Build the whole frame, then write once. One syscall instead of thousands
-	// and no flicker — this is the fast path video playback will reuse.
-	var sb strings.Builder
-	sb.Grow(width*height*3 + height) // ramp runes are up to 3 bytes (█)
-
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			r, g, b, _ := img.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
-
-			normal_r := float64(r>>8) / 255.0
-			normal_g := float64(g>>8) / 255.0
-			normal_b := float64(b>>8) / 255.0
-
-			luminance := redWeight*normal_r + greenWeight*normal_g + blueWeight*normal_b
-
-			if luminance < 0 {
-				luminance = 0
-			}
-			if luminance > 1 {
-				luminance = 1
-			}
-
-			luminance = math.Pow(luminance, 1.0/gamma)
-
-			idx := int(luminance*float64(len(asciiRamp)-1) + 0.5)
-			sb.WriteRune(asciiRamp[idx])
-		}
-		sb.WriteByte('\n')
-	}
-
-	return sb.String()
-}
-
-func resize_image(filename string, terminal_width int, terminal_height int) (image.Image, error) {
+// decodeImage opens and decodes an image file (gif/jpeg/png via the blank
+// imports above). Split out so both the character-grid resize and the
+// higher-resolution edge buffer can work from a single decode.
+func decodeImage(filename string) (image.Image, error) {
 	image_file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("open %q: %w", filename, err)
@@ -137,6 +159,14 @@ func resize_image(filename string, terminal_width int, terminal_height int) (ima
 	if err != nil {
 		return nil, fmt.Errorf("decode %q: %w", filename, err)
 	}
+	return decoded_image, nil
+}
+
+func resize_image(filename string, terminal_width int, terminal_height int) (image.Image, error) {
+	decoded_image, err := decodeImage(filename)
+	if err != nil {
+		return nil, err
+	}
 
 	bounds := decoded_image.Bounds()
 	cols, rows := fitDimensions(bounds.Dx(), bounds.Dy(), terminal_width, terminal_height)
@@ -146,8 +176,7 @@ func resize_image(filename string, terminal_width int, terminal_height int) (ima
 
 // fitDimensions returns the largest (cols, rows) that fits within maxCols×maxRows
 // while preserving the source aspect ratio and correcting for the terminal cell
-// shape (cellAspect). This fixes both vertical squashing (P2) and stretching of
-// non-matching aspect ratios (P10). Output is contain-style: no padding.
+// shape (cellAspect). Output is contain-style: no padding.
 func fitDimensions(srcW, srcH, maxCols, maxRows int) (cols, rows int) {
 	if srcW <= 0 || srcH <= 0 {
 		return 1, 1

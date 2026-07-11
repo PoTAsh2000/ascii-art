@@ -4,3 +4,6 @@
 
 # Local sample images (kept locally, not tracked)
 test_images/
+
+# Per-filter debug images
+debug/

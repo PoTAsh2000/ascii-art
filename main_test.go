@@ -25,7 +25,7 @@ func TestRenderRealImage(t *testing.T) {
 		t.Fatalf("resize_image failed: %v", err)
 	}
 
-	lines := gridLines(render(img))
+	lines := gridLines(render(img, nil))
 	if len(lines) == 0 || len(lines) > maxH {
 		t.Fatalf("row count %d not in 1..%d", len(lines), maxH)
 	}
@@ -79,7 +79,7 @@ func TestRenderGridSynthetic(t *testing.T) {
 		}
 	}
 
-	lines := gridLines(render(img))
+	lines := gridLines(render(img, nil))
 	if len(lines) != h {
 		t.Fatalf("expected %d rows, got %d", h, len(lines))
 	}
@@ -102,14 +102,14 @@ func TestRenderKnownPixels(t *testing.T) {
 		return img
 	}
 
-	black := strings.ReplaceAll(render(solid(color.RGBA{0, 0, 0, 255})), "\n", "")
+	black := strings.ReplaceAll(render(solid(color.RGBA{0, 0, 0, 255}), nil), "\n", "")
 	for _, r := range black {
 		if r != ' ' {
 			t.Fatalf("black image should render as spaces, got %q", black)
 		}
 	}
 
-	white := strings.TrimRight(render(solid(color.RGBA{255, 255, 255, 255})), "\n")
+	white := strings.TrimRight(render(solid(color.RGBA{255, 255, 255, 255}), nil), "\n")
 	if !strings.Contains(white, "█") {
 		t.Fatalf("white image should render as full blocks, got %q", white)
 	}
