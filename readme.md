@@ -30,6 +30,24 @@ Every filter lives in its own `filter_*.go` file so parameters are easy to find 
 
 Example: ```go run . --dog-threshold 0.05 --edges=on image.jpg```
 
+### Tuning guide
+The filters are analog, but the output is quantized four times after them (binary threshold →
+4-direction bucket → 8×8 tile vote → single-width thinning). Small tweaks often snap back to the
+same glyphs, so **judge changes on `debug/02_dog.png` and `debug/03_threshold_mask.png`** (before the
+quantization) rather than the ASCII alone.
+
+| Flag | Useful range (sweet spot) | Changes these images the most | If you move it, also move |
+|------|---------------------------|-------------------------------|---------------------------|
+| `--sigma` | 0.8 – 4.0 (1.5 – 2.5) | busy / fine-texture photos (big sigma erases fine detail); flat images barely react | up ⇒ lower `--dog-threshold` (bigger blur = weaker DoG) |
+| `--sigma-scale` | 1.1 – 2.0 (1.4 – 1.8) | images mixing sharp and soft edges | toward 1.0 ⇒ lower `--dog-threshold` a lot (response nears 0) |
+| `--tau` | 0.90 – 1.00 (0.95 – 1.0) | low-contrast images | lower tau ⇒ lower `--dog-threshold` |
+| `--dog-threshold` | 0.005 – 0.08 (0.02 – 0.05) | **textured / noisy backgrounds** (dead zone on high-contrast subject over flat bg) | raise a lot ⇒ lower `--tile-fill` to keep lines |
+| `--mag-threshold` | 0.0 – 0.3 (0.0 – 0.1) | speckly / jittery direction; little effect (mask already gates) | alternative to `--dog-threshold` |
+| `--tile-fill` | 0.06 – 0.35 (0.10 – 0.20) | medium edge-density images; **step by ≥ 1/64 ≈ 0.016** or nothing changes | raise `--dog-threshold` ⇒ lower this |
+
+Two constants live in the files (no flag): `defaultTile` (`main.go`, 4–16, coarser = fewer chars) and
+`kernelRadiusSigmas` (`filter_gaussian.go`, 2–4).
+
 ## Recommandations
 ⚠️ Disclamer: Some images fail to decode. This is something that still needs to be looked at. Most jpg and png files work fine.
 * **Set your terminal font size small (≈8px).** The art gets far more detail because a smaller font fits more character cells on screen. This cannot be done by the program: modern Windows terminals (Windows Terminal, VS Code, mintty/Git Bash) run through ConPTY, which ignores the console font/window APIs, so the font must be set manually in your terminal settings.

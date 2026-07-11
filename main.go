@@ -28,10 +28,10 @@ const (
 	defaultTile = 8
 	// DoG preprocess (filter_dog.go): two blurs at sigma and sigma*scale, their
 	// weighted difference thresholded into a binary edge mask.
-	defaultSigma        = 2.0
+	defaultSigma        = 2.5
 	defaultSigmaScale   = 1.6
 	defaultTau          = 1.0
-	defaultDogThreshold = 0.035
+	defaultDogThreshold = 0.015
 	// Sobel voting (filter_sobel.go / edges.go): ignore near-zero gradients, and
 	// require this fraction of a tile to be edge pixels before drawing a line
 	// (0.125 = the reference's 8-of-64 rule).
